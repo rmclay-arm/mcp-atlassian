@@ -61,6 +61,36 @@ Ask your AI assistant to:
 - **"Create a bug ticket for the login issue"**
 - **"Update the status of PROJ-123 to Done"**
 
+## Per-Request Credentials (Multi-User)
+
+The server supports **per-request** Jira and Confluence credentials so you don’t have to keep any
+tokens on the server.  
+Send the following HTTP headers with each request:
+
+| Header | Example | Description |
+|--------|---------|-------------|
+| `X-Jira-Authorization` | `Bearer <OAuthAccessToken>` &#124; `Token <PAT>` | Jira OAuth 2.0 bearer token **or** Personal Access Token |
+| `X-Confluence-Authorization` | `Bearer <OAuthAccessToken>` &#124; `Token <PAT>` | Confluence OAuth 2.0 bearer token **or** Personal Access Token |
+| `X-Jira-Cloud-Id` | `d9a871b3-proj-1234` | (Optional) Cloud ID for the Jira site |
+| `X-Confluence-Cloud-Id` | `6f5c0c42-wiki-7890` | (Optional) Cloud ID for the Confluence site |
+
+Backward-compatibility:
+
+* If the product-specific auth headers are **omitted**, the legacy `Authorization` header is
+  used for both Jira and Confluence.
+* If the product-specific cloud-ID headers are **omitted**, the legacy
+  `X-Atlassian-Cloud-Id` header is used.
+
+### Example `curl`
+
+```bash
+curl -X POST http://localhost:8000/mcp \
+  -H "Content-Type: application/json" \
+  -H "X-Jira-Authorization: Bearer $JIRA_OAUTH_ACCESS_TOKEN" \
+  -H "X-Confluence-Authorization: Token $CONFLUENCE_PAT" \
+  -d '{"tool":"jira_search","arguments":{"jql":"assignee = currentUser()"}}'
+```
+
 ## Documentation
 
 Full documentation is available at **[personal-1d37018d.mintlify.app](https://personal-1d37018d.mintlify.app)**.

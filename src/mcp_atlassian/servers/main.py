@@ -239,12 +239,23 @@ class UserTokenMiddleware:
         if "state" not in scope_copy:
             scope_copy["state"] = {}
 
-        # Initialize default authentication state
-        scope_copy["state"]["user_atlassian_token"] = None
-        scope_copy["state"]["user_atlassian_auth_type"] = None
-        scope_copy["state"]["user_atlassian_email"] = None
-        scope_copy["state"]["user_atlassian_cloud_id"] = None
-        scope_copy["state"]["auth_validation_error"] = None
+        # Initialize default authentication state (legacy + per-product)
+        default_state = {
+            "user_atlassian_token": None,
+            "user_atlassian_auth_type": None,
+            "user_atlassian_email": None,
+            "user_atlassian_cloud_id": None,
+            # Per-product (new)
+            "user_jira_token": None,
+            "user_jira_auth_type": None,
+            "user_jira_cloud_id": None,
+            "user_confluence_token": None,
+            "user_confluence_auth_type": None,
+            "user_confluence_cloud_id": None,
+            # Error holder
+            "auth_validation_error": None,
+        }
+        scope_copy["state"].update(default_state)
 
         logger.debug(
             f"UserTokenMiddleware: Processing {scope_copy.get('method', 'UNKNOWN')} "
@@ -317,48 +328,160 @@ class UserTokenMiddleware:
             return False
 
     def _process_authentication_headers(self, scope: Scope) -> None:
-        """Process authentication headers and store in scope state."""
+        """Process authentication headers (legacy + per-product) and populate scope state."""
         try:
-            # Parse headers from scope (headers are byte tuples per ASGI spec)
-            headers = dict(scope.get("headers", []))
-            auth_header = headers.get(b"authorization")
-            cloud_id_header = headers.get(b"x-atlassian-cloud-id")
+            headers_bytes = dict(scope.get("headers", []))
 
-            # Convert bytes to strings (ASGI headers are always bytes)
-            auth_header_str = auth_header.decode("latin-1") if auth_header else None
-            cloud_id_str = (
-                cloud_id_header.decode("latin-1") if cloud_id_header else None
-            )
+            def _h(name: bytes) -> str | None:
+                val = headers_bytes.get(name)
+                return val.decode("latin-1") if val else None
 
-            # Log mcp-session-id for debugging
-            mcp_session_id = headers.get(b"mcp-session-id")
+            # Raw header strings
+            legacy_auth = _h(b"authorization")
+            legacy_cloud = _h(b"x-atlassian-cloud-id")
+
+            jira_auth = _h(b"x-jira-authorization")
+            conf_auth = _h(b"x-confluence-authorization")
+
+            jira_cloud = _h(b"x-jira-cloud-id")
+            conf_cloud = _h(b"x-confluence-cloud-id")
+
+            # Optional debug aid (safe, contains no secrets)
+            mcp_session_id = _h(b"mcp-session-id")
             if mcp_session_id:
-                session_id_str = mcp_session_id.decode("latin-1")
                 logger.debug(
-                    f"UserTokenMiddleware: MCP-Session-ID header found: {session_id_str}"
+                    "UserTokenMiddleware: MCP-Session-ID header found: %s",
+                    mcp_session_id,
                 )
 
             logger.debug(
-                f"UserTokenMiddleware: Processing auth for {scope.get('path')}, "
-                f"AuthHeader present: {bool(auth_header_str)}, "
-                f"CloudId present: {bool(cloud_id_str)}"
+                "UserTokenMiddleware: Auth presence (legacy=%s, jira=%s, confluence=%s), "
+                "CloudId presence (legacy=%s, jira=%s, confluence=%s)",
+                bool(legacy_auth),
+                bool(jira_auth),
+                bool(conf_auth),
+                bool(legacy_cloud),
+                bool(jira_cloud),
+                bool(conf_cloud),
             )
 
-            # Process Cloud ID
-            if cloud_id_str and cloud_id_str.strip():
-                scope["state"]["user_atlassian_cloud_id"] = cloud_id_str.strip()
-                logger.debug(
-                    f"UserTokenMiddleware: Extracted cloudId: {cloud_id_str.strip()}"
+            # Helper to parse header value
+            def _parse(header_val: str) -> tuple[str | None, str | None, str | None]:
+                """Return (token, auth_type, error_msg)."""
+                if not header_val.strip():
+                    return None, None, "Unauthorized: Empty Authorization header"
+                if header_val.startswith("Bearer "):
+                    token = header_val[7:].strip()
+                    if not token:
+                        return None, None, "Unauthorized: Empty Bearer token"
+                    return token, "oauth", None
+                if header_val.startswith("Token "):
+                    token = header_val[6:].strip()
+                    if not token:
+                        return None, None, "Unauthorized: Empty Token (PAT)"
+                    return token, "pat", None
+                # Unsupported scheme
+                scheme = header_val.split(" ", 1)[0] if header_val.strip() else ""
+                if scheme:
+                    logger.warning("Unsupported Authorization type: %s", scheme)
+                return None, None, (
+                    "Unauthorized: Only 'Bearer <OAuthToken>' or "
+                    "'Token <PAT>' types are supported."
                 )
 
-            # Process Authorization header
-            if auth_header_str:
-                self._parse_auth_header(auth_header_str, scope)
+            # Parse individual auth headers
+            legacy_tok, legacy_type, legacy_err = (
+                _parse(legacy_auth) if legacy_auth else (None, None, None)
+            )
+            jira_tok, jira_type, jira_err = (
+                _parse(jira_auth) if jira_auth else (None, None, None)
+            )
+            conf_tok, conf_type, conf_err = (
+                _parse(conf_auth) if conf_auth else (None, None, None)
+            )
+
+            # Fail fast on first parsing error
+            for err in (legacy_err, jira_err, conf_err):
+                if err:
+                    scope["state"]["auth_validation_error"] = err
+                    return
+
+            # Store per-product values
+            scope["state"]["user_jira_token"] = jira_tok
+            scope["state"]["user_jira_auth_type"] = jira_type
+            scope["state"]["user_confluence_token"] = conf_tok
+            scope["state"]["user_confluence_auth_type"] = conf_type
+
+            scope["state"]["user_jira_cloud_id"] = jira_cloud.strip() if jira_cloud else None
+            scope["state"]["user_confluence_cloud_id"] = (
+                conf_cloud.strip() if conf_cloud else None
+            )
+
+            # Legacy token mirroring (precedence rules)
+            if legacy_tok:
+                # Rule 1
+                scope["state"]["user_atlassian_token"] = legacy_tok
+                scope["state"]["user_atlassian_auth_type"] = legacy_type
             else:
-                logger.debug("UserTokenMiddleware: No Authorization header provided")
+                # Rule 2
+                if (
+                    jira_tok
+                    and conf_tok
+                    and jira_tok == conf_tok
+                    and jira_type == conf_type
+                ):
+                    scope["state"]["user_atlassian_token"] = jira_tok
+                    scope["state"]["user_atlassian_auth_type"] = jira_type
+                elif jira_tok:
+                    scope["state"]["user_atlassian_token"] = jira_tok
+                    scope["state"]["user_atlassian_auth_type"] = jira_type
+                elif conf_tok:
+                    scope["state"]["user_atlassian_token"] = conf_tok
+                    scope["state"]["user_atlassian_auth_type"] = conf_type
+
+            # Legacy cloudId mirroring (precedence rules)
+            if legacy_cloud:
+                scope["state"]["user_atlassian_cloud_id"] = legacy_cloud.strip()
+            elif jira_cloud:
+                scope["state"]["user_atlassian_cloud_id"] = jira_cloud.strip()
+            elif conf_cloud:
+                scope["state"]["user_atlassian_cloud_id"] = conf_cloud.strip()
+
+            # Fallback per-product with legacy if still missing
+            if not jira_tok and legacy_tok:
+                scope["state"]["user_jira_token"] = legacy_tok
+                scope["state"]["user_jira_auth_type"] = legacy_type
+            if not conf_tok and legacy_tok:
+                scope["state"]["user_confluence_token"] = legacy_tok
+                scope["state"]["user_confluence_auth_type"] = legacy_type
+
+            # Fallback cloud ids
+            if not scope["state"]["user_jira_cloud_id"] and legacy_cloud:
+                scope["state"]["user_jira_cloud_id"] = legacy_cloud.strip()
+            if not scope["state"]["user_confluence_cloud_id"] and legacy_cloud:
+                scope["state"]["user_confluence_cloud_id"] = legacy_cloud.strip()
+
+            # Masked debug logs for extracted tokens
+            if jira_tok:
+                logger.debug(
+                    "UserTokenMiddleware: Jira token extracted (masked): ...%s",
+                    mask_sensitive(jira_tok, 8),
+                )
+            if conf_tok and conf_tok != jira_tok:
+                logger.debug(
+                    "UserTokenMiddleware: Confluence token extracted (masked): ...%s",
+                    mask_sensitive(conf_tok, 8),
+                )
+            if legacy_tok and legacy_tok not in (jira_tok, conf_tok):
+                logger.debug(
+                    "UserTokenMiddleware: Legacy token extracted (masked): ...%s",
+                    mask_sensitive(legacy_tok, 8),
+                )
 
         except Exception as e:
-            logger.error(f"Error processing authentication headers: {e}", exc_info=True)
+            logger.error(
+                "Error processing authentication headers: %s", e, exc_info=True
+            )
             scope["state"]["auth_validation_error"] = "Authentication processing error"
 
     def _parse_auth_header(self, auth_header: str, scope: Scope) -> None:
