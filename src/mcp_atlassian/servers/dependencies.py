@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from fastmcp import Context
 from fastmcp.server.dependencies import get_http_request
@@ -154,6 +154,63 @@ def _create_user_config_for_fetcher(
         raise TypeError(f"Unsupported base_config type: {type(base_config)}")
 
 
+def _select_request_credentials(
+    request: Request, service: Literal["jira", "confluence"]
+) -> tuple[str | None, Any, Any, Any]:
+    """Select credentials for the requested Atlassian product.
+
+    This helper chooses between per-product request.state keys and the legacy
+    generic `user_atlassian_*` keys **without** altering legacy semantics.
+
+    Selection rules:
+      • If *any* per-product key is present on request.state, those per-product
+        values are returned (even if they are empty strings / None).
+      • Otherwise, the legacy generic values are returned.
+    The function makes no “truthy” checks – presence of an attribute decides.
+    It returns a tuple: (auth_type, token, cloud_id, email).
+    """
+    if service == "jira":
+        per_product_keys = (
+            "user_jira_auth_type",
+            "user_jira_token",
+            "user_jira_cloud_id",
+        )
+        if any(k in vars(request.state) for k in per_product_keys):
+            return (
+                getattr(request.state, "user_jira_auth_type", None),
+                getattr(request.state, "user_jira_token", None),
+                getattr(request.state, "user_jira_cloud_id", None),
+                getattr(request.state, "user_jira_email", None),
+            )
+        return (
+            getattr(request.state, "user_atlassian_auth_type", None),
+            getattr(request.state, "user_atlassian_token", None),
+            getattr(request.state, "user_atlassian_cloud_id", None),
+            getattr(request.state, "user_atlassian_email", None),
+        )
+    elif service == "confluence":
+        per_product_keys = (
+            "user_confluence_auth_type",
+            "user_confluence_token",
+            "user_confluence_cloud_id",
+        )
+        if any(k in vars(request.state) for k in per_product_keys):
+            return (
+                getattr(request.state, "user_confluence_auth_type", None),
+                getattr(request.state, "user_confluence_token", None),
+                getattr(request.state, "user_confluence_cloud_id", None),
+                getattr(request.state, "user_confluence_email", None),
+            )
+        return (
+            getattr(request.state, "user_atlassian_auth_type", None),
+            getattr(request.state, "user_atlassian_token", None),
+            getattr(request.state, "user_atlassian_cloud_id", None),
+            getattr(request.state, "user_atlassian_email", None),
+        )
+    else:  # pragma: no cover – Literal guards callers
+        raise ValueError(f"Unsupported service '{service}' passed to selector")
+
+
 async def get_jira_fetcher(ctx: Context) -> JiraFetcher:
     """Returns a JiraFetcher instance appropriate for the current request context.
 
@@ -179,17 +236,16 @@ async def get_jira_fetcher(ctx: Context) -> JiraFetcher:
         if hasattr(request.state, "jira_fetcher") and request.state.jira_fetcher:
             logger.debug("get_jira_fetcher: Returning JiraFetcher from request.state.")
             return request.state.jira_fetcher
-        user_auth_type = getattr(request.state, "user_atlassian_auth_type", None)
+        selected_auth_type, selected_token, selected_cloud_id, selected_email = _select_request_credentials(
+            request, "jira"
+        )
+        user_auth_type = selected_auth_type
         logger.debug(f"get_jira_fetcher: User auth type: {user_auth_type}")
         # If OAuth or PAT token is present, create user-specific fetcher
-        if user_auth_type in ["oauth", "pat"] and hasattr(
-            request.state, "user_atlassian_token"
-        ):
-            user_token = getattr(request.state, "user_atlassian_token", None)
-            user_email = getattr(
-                request.state, "user_atlassian_email", None
-            )  # May be None for PAT
-            user_cloud_id = getattr(request.state, "user_atlassian_cloud_id", None)
+        if user_auth_type in ["oauth", "pat"] and selected_token is not None:
+            user_token = selected_token
+            user_email = selected_email  # May be None for PAT
+            user_cloud_id = selected_cloud_id
 
             if not user_token:
                 raise ValueError("User Atlassian token found in state but is empty.")
@@ -289,14 +345,15 @@ async def get_confluence_fetcher(ctx: Context) -> ConfluenceFetcher:
                 "get_confluence_fetcher: Returning ConfluenceFetcher from request.state."
             )
             return request.state.confluence_fetcher
-        user_auth_type = getattr(request.state, "user_atlassian_auth_type", None)
+        selected_auth_type, selected_token, selected_cloud_id, selected_email = _select_request_credentials(
+            request, "confluence"
+        )
+        user_auth_type = selected_auth_type
         logger.debug(f"get_confluence_fetcher: User auth type: {user_auth_type}")
-        if user_auth_type in ["oauth", "pat"] and hasattr(
-            request.state, "user_atlassian_token"
-        ):
-            user_token = getattr(request.state, "user_atlassian_token", None)
-            user_email = getattr(request.state, "user_atlassian_email", None)
-            user_cloud_id = getattr(request.state, "user_atlassian_cloud_id", None)
+        if user_auth_type in ["oauth", "pat"] and selected_token is not None:
+            user_token = selected_token
+            user_email = selected_email
+            user_cloud_id = selected_cloud_id
 
             if not user_token:
                 raise ValueError("User Atlassian token found in state but is empty.")

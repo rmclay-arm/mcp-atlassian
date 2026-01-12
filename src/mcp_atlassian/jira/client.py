@@ -47,9 +47,32 @@ class JiraClient:
 
         # Initialize the Jira client based on auth type
         if self.config.auth_type == "oauth":
-            if not self.config.oauth_config or not self.config.oauth_config.cloud_id:
-                error_msg = "OAuth authentication requires a valid cloud_id"
+            if not self.config.oauth_config:
+                error_msg = "OAuth authentication requires oauth_config"
                 raise ValueError(error_msg)
+
+            # Import types locally to avoid unnecessary dependencies when OAuth not used
+            from mcp_atlassian.utils.oauth import BYOAccessTokenOAuthConfig, OAuthConfig
+
+            # Validate OAuth configuration based on instance type
+            if isinstance(self.config.oauth_config, OAuthConfig):
+                if self.config.oauth_config.is_cloud:
+                    if not self.config.oauth_config.cloud_id:
+                        error_msg = (
+                            "OAuth authentication requires a valid cloud_id"
+                        )
+                        raise ValueError(error_msg)
+                else:  # Data Center
+                    if not self.config.oauth_config.instance_url:
+                        error_msg = (
+                            "OAuth authentication for Data Center requires a valid instance_url"
+                        )
+                        raise ValueError(error_msg)
+            elif isinstance(self.config.oauth_config, BYOAccessTokenOAuthConfig):
+                # BYO token only supports Cloud
+                if not self.config.oauth_config.cloud_id:
+                    error_msg = "OAuth authentication requires a valid cloud_id"
+                    raise ValueError(error_msg)
 
             # Create a session for OAuth
             session = Session()
@@ -59,16 +82,27 @@ class JiraClient:
                 error_msg = "Failed to configure OAuth session"
                 raise MCPAtlassianAuthenticationError(error_msg)
 
-            # The Jira API URL with OAuth is different
-            api_url = (
-                f"https://api.atlassian.com/ex/jira/{self.config.oauth_config.cloud_id}"
-            )
+            # Determine the API URL based on instance type
+            if isinstance(self.config.oauth_config, OAuthConfig):
+                if self.config.oauth_config.is_cloud:
+                    api_url = (
+                        f"https://api.atlassian.com/ex/jira/{self.config.oauth_config.cloud_id}"
+                    )
+                    is_cloud_instance = True
+                else:
+                    api_url = self.config.oauth_config.instance_url
+                    is_cloud_instance = False
+            else:  # BYOAccessTokenOAuthConfig – always Cloud
+                api_url = (
+                    f"https://api.atlassian.com/ex/jira/{self.config.oauth_config.cloud_id}"
+                )
+                is_cloud_instance = True
 
             # Initialize Jira with the session
             self.jira = Jira(
                 url=api_url,
                 session=session,
-                cloud=True,  # OAuth is only for Cloud
+                cloud=is_cloud_instance,
                 verify_ssl=self.config.ssl_verify,
             )
         elif self.config.auth_type == "pat":

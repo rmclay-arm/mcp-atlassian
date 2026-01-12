@@ -182,18 +182,29 @@ class JiraConfig:
             if self.oauth_config:
                 # Full OAuth configuration (traditional mode)
                 if isinstance(self.oauth_config, OAuthConfig):
-                    if (
-                        self.oauth_config.client_id
-                        and self.oauth_config.client_secret
-                        and self.oauth_config.redirect_uri
-                        and self.oauth_config.scope
-                        and self.oauth_config.cloud_id
-                    ):
-                        return True
+                    # Standard OAuth (full 3LO flow)
+                    if self.oauth_config.is_cloud:
+                        if (
+                            self.oauth_config.client_id
+                            and self.oauth_config.client_secret
+                            and self.oauth_config.redirect_uri
+                            and self.oauth_config.scope
+                            and self.oauth_config.cloud_id
+                        ):
+                            return True
+                    else:  # Data Center
+                        if (
+                            self.oauth_config.client_id
+                            and self.oauth_config.client_secret
+                            and self.oauth_config.redirect_uri
+                            and self.oauth_config.scope
+                            and self.oauth_config.instance_url
+                        ):
+                            return True
                     # Minimal OAuth configuration (user-provided tokens mode)
                     # This is valid if we have oauth_config but missing client credentials
                     # In this case, we expect authentication to come from user-provided headers
-                    elif (
+                    if (
                         not self.oauth_config.client_id
                         and not self.oauth_config.client_secret
                     ):
