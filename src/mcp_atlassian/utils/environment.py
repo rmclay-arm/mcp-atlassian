@@ -49,9 +49,28 @@ def _oauth_get(service: str, key: str) -> str | None:
 
 
 def _oauth_enable(service: str) -> bool:
-    # Prefer service-scoped enable if present; otherwise legacy global enable.
-    if _service_oauth_vars_present(service):
-        return _truthy(os.getenv(f"{service}_OAUTH_ENABLE"))
+    """
+    Determine whether OAuth is enabled for a given service following
+    well-defined precedence rules.
+
+    Precedence (highest → lowest):
+      1. Service-scoped ``${SERVICE}_OAUTH_ENABLE`` when explicitly set
+         • Any truthy value  → enabled
+         • Any falsy value   → disabled
+      2. Legacy global ``ATLASSIAN_OAUTH_ENABLE``
+
+    This behaviour allows the new *minimal OAuth* mode to be activated via the
+    global flag even when other service-scoped OAuth variables (such as
+    CLIENT_ID placeholders) are present, unless the operator explicitly sets
+    ``${SERVICE}_OAUTH_ENABLE=false`` to opt-out.
+    """
+    # Read the service-scoped flag **without** requiring that other service-
+    # scoped variables are present. If the flag exists it unconditionally wins.
+    service_enable_raw = os.getenv(f"{service}_OAUTH_ENABLE")
+    if service_enable_raw is not None:
+        return _truthy(service_enable_raw)
+
+    # Fall back to the legacy global flag when no service-scoped override.
     return _truthy(os.getenv("ATLASSIAN_OAUTH_ENABLE"))
 
 

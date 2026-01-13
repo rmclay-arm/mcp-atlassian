@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any, Literal, Optional
@@ -136,6 +137,15 @@ class AtlassianMCP(FastMCP[MainAppContext]):
             f"_list_tools_mcp: read_only={read_only}, enabled_tools_filter={enabled_tools_filter}"
         )
 
+        # Expose tools even when service authentication/configuration is incomplete
+        # unless the operator explicitly disables this behaviour.
+        skip_auth_filter = (
+            str(os.getenv("MCP_EXPOSE_TOOLS_WITHOUT_AUTH", "true"))
+            .strip()
+            .lower()
+            in ("true", "1", "yes", "y", "on")
+        )
+
         all_tools: dict[str, FastMCPTool] = await self.get_tools()
         logger.debug(
             f"Aggregated {len(all_tools)} tools before filtering: {list(all_tools.keys())}"
@@ -175,6 +185,16 @@ class AtlassianMCP(FastMCP[MainAppContext]):
                     f"Excluding tool '{registered_name}' as application context is unavailable to verify service configuration."
                 )
                 service_configured_and_available = False
+
+            if skip_auth_filter:
+                # Override auth-based exclusion – allow schema discovery while
+                # logging a debug note to inform operators.
+                if not service_configured_and_available:
+                    logger.debug(
+                        f"Including tool '{registered_name}' despite incomplete "
+                        "service configuration (MCP_EXPOSE_TOOLS_WITHOUT_AUTH)."
+                    )
+                service_configured_and_available = True
 
             if not service_configured_and_available:
                 continue
