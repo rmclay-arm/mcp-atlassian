@@ -41,32 +41,84 @@ API routes, perform SSL verification, etc.
 
 ---
 
-## 3. Example `curl` Session
+## 3. Initialize + Session Handshake
+
+The **streamable-http** transport requires a one-time handshake per
+connection. Clients **must**:
+
+1. Send `initialize` and capture the `mcp-session-id` response header.  
+2. Acknowledge the session with `notifications/initialized`, passing the same
+   header back to the server.
 
 ```bash
-# List available tools (JSON-RPC)
-curl -sS -X POST "$MCP_URL" \
-  -H "Content-Type: application/json" \
-  -H "X-Jira-Authorization:  Bearer ${JIRA_TOKEN}" \
-  -H "X-Confluence-Authorization: Token  ${CONFLUENCE_PAT}" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+# MCP endpoint
+export MCP_URL="https://central.example.com/mcp"
 
-# Invoke a Jira READ tool (safe):
-curl -sS -X POST "$MCP_URL" \
-  -H "Content-Type: application/json" \
-  -H "X-Jira-Authorization:  Bearer ${JIRA_TOKEN}" \
-  -d '{"tool":"jira_search","arguments":{"jql":"assignee = currentUser()"}}'
+# 1) Negotiate a session and capture the session-ID
+mcp_session_id=$(
+  curl -sS -D- -o /dev/null "$MCP_URL" \
+    -H "Accept: application/json, text/event-stream" \
+    -H "Content-Type: application/json" \
+    -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' |
+    awk '/^mcp-session-id:/ {print $2}' | tr -d '\r'
+)
+echo "Session: ${mcp_session_id}"
 
-# Invoke a Confluence READ tool (safe):
+# 2) Acknowledge the session
 curl -sS -X POST "$MCP_URL" \
+  -H "Accept: application/json, text/event-stream" \
   -H "Content-Type: application/json" \
+  -H "mcp-session-id: ${mcp_session_id}" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"notifications/initialized","params":{}}'
+```
+
+### Server-Sent Events
+
+Responses are delivered as **SSE** frames:
+
+```
+event: message
+data: {"jsonrpc":"2.0","id":2,"result":{...}}
+```
+
+Parse events by buffering until the blank line delimiter, then decode the
+JSON payload that follows the `data:` prefix.
+
+---
+
+## 4. Example `curl` Session
+
+```bash
+# List available tools
+curl -sS -X POST "$MCP_URL" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "Content-Type: application/json" \
+  -H "mcp-session-id: ${mcp_session_id}" \
+  -H "X-Jira-Authorization: Bearer ${JIRA_TOKEN}" \
   -H "X-Confluence-Authorization: Token ${CONFLUENCE_PAT}" \
-  -d '{"tool":"confluence_search","arguments":{"cql":"type = page ORDER BY created DESC"}}'
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+
+# Invoke a Jira READ tool
+curl -sS -X POST "$MCP_URL" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "Content-Type: application/json" \
+  -H "mcp-session-id: ${mcp_session_id}" \
+  -H "X-Jira-Authorization: Bearer ${JIRA_TOKEN}" \
+  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"jira_search","arguments":{"jql":"assignee = currentUser()"}}}'
+
+# Invoke a Confluence READ tool
+curl -sS -X POST "$MCP_URL" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "Content-Type: application/json" \
+  -H "mcp-session-id: ${mcp_session_id}" \
+  -H "X-Confluence-Authorization: Token ${CONFLUENCE_PAT}" \
+  -d '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"confluence_search","arguments":{"query":"type = page ORDER BY created DESC"}}}'
+```
 ```
 
 ---
 
-## 4. Running the Server Centrally
+## 5. Running the Server Centrally
 
 ```bash
 # 1) Install (one-off)
@@ -87,7 +139,7 @@ uvx mcp-atlassian \
 
 ---
 
-## 5. Smoke Test
+## 6. Smoke Test
 
 A ready-made script lives at `scripts/smoke_mcp.sh`.  
 Set the environment variables and run:
@@ -108,3 +160,33 @@ The script performs:
 and prints a concise **SUCCESS/FAIL** report without leaking tokens.
 
 ---
+
+## 7. Single-Service Docker Examples
+
+Run a minimal **Jira-only** or **Confluence-only** MCP server when you only need one product.
+
+### Jira-only
+
+```bash
+docker run --rm -p 9000:9000 \
+  -e JIRA_URL="https://your-company.atlassian.net" \
+  -e JIRA_CLIENT_AUTH=true \
+  -e MCP_EXPOSE_TOOLS_WITHOUT_AUTH=false \
+  -v /etc/ssl/certs/custom-ca.pem:/etc/ssl/certs/custom-ca.pem:ro \
+  -e REQUESTS_CA_BUNDLE=/etc/ssl/certs/custom-ca.pem \
+  sooperset/mcp-atlassian:latest \
+  uvx mcp-atlassian --transport streamable-http --stateless --port 9000
+```
+
+### Confluence-only
+
+```bash
+docker run --rm -p 9000:9000 \
+  -e CONFLUENCE_URL="https://your-company.atlassian.net/wiki" \
+  -e CONFLUENCE_CLIENT_AUTH=true \
+  -e MCP_EXPOSE_TOOLS_WITHOUT_AUTH=false \
+  -v /etc/ssl/certs/custom-ca.pem:/etc/ssl/certs/custom-ca.pem:ro \
+  -e REQUESTS_CA_BUNDLE=/etc/ssl/certs/custom-ca.pem \
+  sooperset/mcp-atlassian:latest \
+  uvx mcp-atlassian --transport streamable-http --stateless --port 9000
+```

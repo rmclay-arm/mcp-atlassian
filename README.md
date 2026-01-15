@@ -106,6 +106,7 @@ Documentation is also available in [llms.txt format](https://llmstxt.org/), whic
 | [Configuration](https://personal-1d37018d.mintlify.app/docs/configuration) | IDE setup, environment variables |
 | [HTTP Transport](https://personal-1d37018d.mintlify.app/docs/http-transport) | SSE, streamable-http, multi-user |
 | [Central Server](./CENTRAL_SERVER.md) | Run centrally with per-request credentials |
+| [Single-Service Examples](./CENTRAL_SERVER.md#7-single-service-docker-examples) | Jira-only and Confluence-only Docker recipes |
 | [Tools Reference](https://personal-1d37018d.mintlify.app/docs/tools-reference) | All Jira & Confluence tools |
 | [Troubleshooting](https://personal-1d37018d.mintlify.app/docs/troubleshooting) | Common issues & debugging |
 

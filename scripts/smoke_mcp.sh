@@ -18,9 +18,14 @@ fail() { echo "❌ $1" >&2; exit 1; }
 pass() { echo "✅ $1"; }
 
 # Basic env checks
-[[ -z "${MCP_URL:-}" ]]                && fail "MCP_URL is required"
-[[ -z "${JIRA_AUTH_HEADER:-}" ]]       && fail "JIRA_AUTH_HEADER is required"
-[[ -z "${CONFLUENCE_AUTH_HEADER:-}" ]] && fail "CONFLUENCE_AUTH_HEADER is required"
+[[ -z "${MCP_URL:-}" ]] && fail "MCP_URL is required"
+
+# Determine which services are enabled (at least one required)
+JIRA_ENABLED=0
+CONF_ENABLED=0
+[[ -n "${JIRA_AUTH_HEADER:-}" ]]       && JIRA_ENABLED=1
+[[ -n "${CONFLUENCE_AUTH_HEADER:-}" ]] && CONF_ENABLED=1
+(( JIRA_ENABLED || CONF_ENABLED )) || fail "At least one of JIRA_AUTH_HEADER or CONFLUENCE_AUTH_HEADER must be set"
 
 # Ensure jq is available for JSON parsing (required for schema-driven smoke test)
 command -v jq >/dev/null 2>&1 || fail "jq is required but not installed"
@@ -62,10 +67,14 @@ BASE_HEADERS=(
 )
 
 ########################################
-# Normalize headers
+# Normalize headers (only for services in use)
 ########################################
-JIRA_AUTH_HEADER="$(normalize_auth_header "${JIRA_AUTH_HEADER}")"
-CONFLUENCE_AUTH_HEADER="$(normalize_auth_header "${CONFLUENCE_AUTH_HEADER}")"
+if (( JIRA_ENABLED )); then
+  JIRA_AUTH_HEADER="$(normalize_auth_header "${JIRA_AUTH_HEADER}")"
+fi
+if (( CONF_ENABLED )); then
+  CONFLUENCE_AUTH_HEADER="$(normalize_auth_header "${CONFLUENCE_AUTH_HEADER}")"
+fi
 
 ########################################
 # 0. initialize → obtain session id
@@ -86,11 +95,15 @@ INIT_PAYLOAD='{
 
 INIT_HEADERS=(
   "${BASE_HEADERS[@]}"
-  -H "X-Jira-Authorization: ${JIRA_AUTH_HEADER}"
-  -H "X-Confluence-Authorization: ${CONFLUENCE_AUTH_HEADER}"
 )
-[[ -n "${JIRA_CLOUD_ID:-}"       ]] && INIT_HEADERS+=( -H "X-Jira-Cloud-Id: ${JIRA_CLOUD_ID}" )
-[[ -n "${CONFLUENCE_CLOUD_ID:-}" ]] && INIT_HEADERS+=( -H "X-Confluence-Cloud-Id: ${CONFLUENCE_CLOUD_ID}" )
+if (( JIRA_ENABLED )); then
+  INIT_HEADERS+=( -H "X-Jira-Authorization: ${JIRA_AUTH_HEADER}" )
+  [[ -n "${JIRA_CLOUD_ID:-}" ]] && INIT_HEADERS+=( -H "X-Jira-Cloud-Id: ${JIRA_CLOUD_ID}" )
+fi
+if (( CONF_ENABLED )); then
+  INIT_HEADERS+=( -H "X-Confluence-Authorization: ${CONFLUENCE_AUTH_HEADER}" )
+  [[ -n "${CONFLUENCE_CLOUD_ID:-}" ]] && INIT_HEADERS+=( -H "X-Confluence-Cloud-Id: ${CONFLUENCE_CLOUD_ID}" )
+fi
 
 INIT_RESP_AND_CODE=$(
   curl -sS -D "${TMP_HEADERS}" -w '\n%{http_code}' \
@@ -124,11 +137,15 @@ echo "⏳ Sending notifications/initialized …"
 NOTIFY_HEADERS=(
   "${BASE_HEADERS[@]}"
   -H "mcp-session-id: ${SESSION_ID}"
-  -H "X-Jira-Authorization: ${JIRA_AUTH_HEADER}"
-  -H "X-Confluence-Authorization: ${CONFLUENCE_AUTH_HEADER}"
 )
-[[ -n "${JIRA_CLOUD_ID:-}"       ]] && NOTIFY_HEADERS+=( -H "X-Jira-Cloud-Id: ${JIRA_CLOUD_ID}" )
-[[ -n "${CONFLUENCE_CLOUD_ID:-}" ]] && NOTIFY_HEADERS+=( -H "X-Confluence-Cloud-Id: ${CONFLUENCE_CLOUD_ID}" )
+if (( JIRA_ENABLED )); then
+  NOTIFY_HEADERS+=( -H "X-Jira-Authorization: ${JIRA_AUTH_HEADER}" )
+  [[ -n "${JIRA_CLOUD_ID:-}" ]] && NOTIFY_HEADERS+=( -H "X-Jira-Cloud-Id: ${JIRA_CLOUD_ID}" )
+fi
+if (( CONF_ENABLED )); then
+  NOTIFY_HEADERS+=( -H "X-Confluence-Authorization: ${CONFLUENCE_AUTH_HEADER}" )
+  [[ -n "${CONFLUENCE_CLOUD_ID:-}" ]] && NOTIFY_HEADERS+=( -H "X-Confluence-Cloud-Id: ${CONFLUENCE_CLOUD_ID}" )
+fi
 
 NOTIFY_HTTP_CODE=$(
   curl -sS -o /dev/null -w "%{http_code}" \
@@ -146,11 +163,15 @@ echo "⏳ Listing tools …"
 LIST_HEADERS=(
   "${BASE_HEADERS[@]}"
   -H "mcp-session-id: ${SESSION_ID}"
-  -H "X-Jira-Authorization: ${JIRA_AUTH_HEADER}"
-  -H "X-Confluence-Authorization: ${CONFLUENCE_AUTH_HEADER}"
 )
-[[ -n "${JIRA_CLOUD_ID:-}"       ]] && LIST_HEADERS+=( -H "X-Jira-Cloud-Id: ${JIRA_CLOUD_ID}" )
-[[ -n "${CONFLUENCE_CLOUD_ID:-}" ]] && LIST_HEADERS+=( -H "X-Confluence-Cloud-Id: ${CONFLUENCE_CLOUD_ID}" )
+if (( JIRA_ENABLED )); then
+  LIST_HEADERS+=( -H "X-Jira-Authorization: ${JIRA_AUTH_HEADER}" )
+  [[ -n "${JIRA_CLOUD_ID:-}" ]] && LIST_HEADERS+=( -H "X-Jira-Cloud-Id: ${JIRA_CLOUD_ID}" )
+fi
+if (( CONF_ENABLED )); then
+  LIST_HEADERS+=( -H "X-Confluence-Authorization: ${CONFLUENCE_AUTH_HEADER}" )
+  [[ -n "${CONFLUENCE_CLOUD_ID:-}" ]] && LIST_HEADERS+=( -H "X-Confluence-Cloud-Id: ${CONFLUENCE_CLOUD_ID}" )
+fi
 
 LIST_RESP=$(
   curl -sS -N \
@@ -204,11 +225,12 @@ choose_key() {
 ########################################
 # 2. jira_search (read-only, schema-driven)
 ########################################
+if (( JIRA_ENABLED )); then
 echo "⏳ Jira search …"
 
 # Locate jira_search schema and determine correct argument keys
 JIRA_SCHEMA=$(echo "${LIST_JSON}" | jq -c '.result.tools[]? | select(.name=="jira_search")')
-[[ -n "${JIRA_SCHEMA}" ]] || fail "jira_search definition not found in tools/list"
+[[ -n "${JIRA_SCHEMA}" ]] || fail "jira_search definition not found in tools/list – check service configuration or MCP_EXPOSE_TOOLS_WITHOUT_AUTH"
 
 JIRA_PROPS=$(echo "${JIRA_SCHEMA}" | jq '.inputSchema.properties')
 JIRA_QUERY_KEY=$(choose_key "${JIRA_PROPS}" jql query q) \
@@ -246,14 +268,16 @@ JIRA_RESP=$(
 JIRA_JSON="$(echo "${JIRA_RESP}" | extract_sse_json)"
 ensure_no_is_error "${JIRA_JSON}"
 pass "jira_search isError=false"
+fi
 
 ########################################
 # 3. confluence_search (read-only, schema-driven)
 ########################################
+if (( CONF_ENABLED )); then
 echo "⏳ Confluence search …"
 
 CONF_SCHEMA=$(echo "${LIST_JSON}" | jq -c '.result.tools[]? | select(.name=="confluence_search")')
-[[ -n "${CONF_SCHEMA}" ]] || fail "confluence_search definition not found in tools/list"
+[[ -n "${CONF_SCHEMA}" ]] || fail "confluence_search definition not found in tools/list – check service configuration or MCP_EXPOSE_TOOLS_WITHOUT_AUTH"
 
 CONF_PROPS=$(echo "${CONF_SCHEMA}" | jq '.inputSchema.properties')
 CONF_QUERY_KEY=$(choose_key "${CONF_PROPS}" cql query) \
@@ -291,5 +315,6 @@ CONF_RESP=$(
 CONF_JSON="$(echo "${CONF_RESP}" | extract_sse_json)"
 ensure_no_is_error "${CONF_JSON}"
 pass "confluence_search isError=false"
+fi
 
 echo "🎉 Smoke test PASSED"
