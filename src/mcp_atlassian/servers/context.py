@@ -20,3 +20,8 @@ class MainAppContext:
     full_confluence_config: ConfluenceConfig | None = None
     read_only: bool = False
     enabled_tools: list[str] | None = None
+    # Flags reflecting authentication modes and server-side credential status
+    confluence_client_auth: bool = False
+    jira_client_auth: bool = False
+    confluence_auth_configured: bool = False
+    jira_auth_configured: bool = False

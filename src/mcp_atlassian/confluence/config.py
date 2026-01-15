@@ -5,7 +5,7 @@ import os
 from dataclasses import dataclass
 from typing import Literal
 
-from ..utils.env import get_custom_headers, is_env_ssl_verify
+from ..utils.env import get_custom_headers, is_env_ssl_verify, is_env_truthy
 from ..utils.oauth import (
     BYOAccessTokenOAuthConfig,
     OAuthConfig,
@@ -88,6 +88,8 @@ class ConfluenceConfig:
         username = os.getenv("CONFLUENCE_USERNAME")
         api_token = os.getenv("CONFLUENCE_API_TOKEN")
         personal_token = os.getenv("CONFLUENCE_PERSONAL_TOKEN")
+        # Client-auth mode flag: allows loading base config without in-env token
+        client_auth_mode = is_env_truthy("CONFLUENCE_CLIENT_AUTH")
 
         # Check for OAuth configuration
         oauth_config = get_oauth_config_from_env(prefixes=("CONFLUENCE_OAUTH_", "ATLASSIAN_OAUTH_"))
@@ -118,6 +120,9 @@ class ConfluenceConfig:
                 auth_type = "oauth"
             elif username and api_token:
                 auth_type = "basic"
+            elif client_auth_mode:
+                # Client provides PAT via request headers - accept base config without in-env token
+                auth_type = "pat"
             else:
                 error_msg = "Server/Data Center authentication requires CONFLUENCE_PERSONAL_TOKEN or CONFLUENCE_USERNAME and CONFLUENCE_API_TOKEN"
                 raise ValueError(error_msg)

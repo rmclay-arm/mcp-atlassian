@@ -15,6 +15,16 @@ def _truthy(value: str | None) -> bool:
     return (value or "").strip().lower() in _TRUTHY
 
 
+def _client_auth_enabled(service: str) -> bool:
+    """
+    Return True if ``${SERVICE}_CLIENT_AUTH`` is set to a truthy value.
+
+    This activates *client-provided authentication* mode where callers include
+    authentication headers directly and no server-side credentials are required.
+    """
+    return _truthy(os.getenv(f"{service}_CLIENT_AUTH"))
+
+
 def _service_oauth_vars_present(service: str) -> bool:
     """
     Return True if *any* service-scoped OAuth variables are present for this service.
@@ -135,6 +145,11 @@ def get_available_services() -> dict[str, bool | None]:
     if confluence_url:
         is_cloud = is_atlassian_cloud_url(confluence_url)
 
+        # 0) Client-provided auth via headers (no server-side credentials required)
+        if _client_auth_enabled("CONFLUENCE"):
+            confluence_is_setup = True
+            logger.info("Using Confluence client-provided authentication via headers")
+
         # 1) OAuth (service-scoped first, legacy fallback)
         oauth_ok, oauth_msg = _configured_via_oauth("CONFLUENCE")
         if oauth_ok:
@@ -169,6 +184,11 @@ def get_available_services() -> dict[str, bool | None]:
 
     if jira_url:
         is_cloud = is_atlassian_cloud_url(jira_url)
+
+        # 0) Client-provided auth via headers (no server-side credentials required)
+        if _client_auth_enabled("JIRA"):
+            jira_is_setup = True
+            logger.info("Using Jira client-provided authentication via headers")
 
         # 1) OAuth (service-scoped first, legacy fallback)
         oauth_ok, oauth_msg = _configured_via_oauth("JIRA")

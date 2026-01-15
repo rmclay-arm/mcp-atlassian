@@ -87,27 +87,29 @@ def _create_user_config_for_fetcher(
         global_oauth_cfg = base_config.oauth_config
 
         # Use provided cloud_id or fall back to global config cloud_id
-        effective_cloud_id = cloud_id if cloud_id else global_oauth_cfg.cloud_id
-        if not effective_cloud_id:
-            raise ValueError(
-                "Cloud ID is required for OAuth authentication. "
-                "Provide it via X-Atlassian-Cloud-Id header or configure it globally."
-            )
+        # Determine effective site identification depending on instance type
+        if global_oauth_cfg.is_cloud:
+            effective_cloud_id = cloud_id if cloud_id else global_oauth_cfg.cloud_id
+            if not effective_cloud_id:
+                raise ValueError(
+                    "Cloud ID is required for Atlassian Cloud OAuth authentication. "
+                    "Provide it via X-Atlassian-Cloud-Id header or configure it globally."
+                )
+        else:  # Data Center – cloud_id not applicable
+            effective_cloud_id = None
 
         # For minimal OAuth config (user-provided tokens), use empty strings for client credentials
         oauth_config_for_user = OAuthConfig(
-            client_id=global_oauth_cfg.client_id if global_oauth_cfg.client_id else "",
-            client_secret=global_oauth_cfg.client_secret
-            if global_oauth_cfg.client_secret
-            else "",
-            redirect_uri=global_oauth_cfg.redirect_uri
-            if global_oauth_cfg.redirect_uri
-            else "",
-            scope=global_oauth_cfg.scope if global_oauth_cfg.scope else "",
+            client_id=global_oauth_cfg.client_id or "",
+            client_secret=global_oauth_cfg.client_secret or "",
+            redirect_uri=global_oauth_cfg.redirect_uri or "",
+            scope=global_oauth_cfg.scope or "",
             access_token=user_access_token,
             refresh_token=None,
             expires_at=None,
             cloud_id=effective_cloud_id,
+            instance_type=global_oauth_cfg.instance_type,
+            instance_url=global_oauth_cfg.instance_url,
         )
         common_args.update(
             {
@@ -241,6 +243,19 @@ async def get_jira_fetcher(ctx: Context) -> JiraFetcher:
         )
         user_auth_type = selected_auth_type
         logger.debug(f"get_jira_fetcher: User auth type: {user_auth_type}")
+        # Enforce client-provided authentication when configured (no global fallback)
+        lifespan_ctx_dict = ctx.request_context.lifespan_context  # type: ignore
+        app_lifespan_ctx: MainAppContext | None = (
+            lifespan_ctx_dict.get("app_lifespan_context")
+            if isinstance(lifespan_ctx_dict, dict)
+            else None
+        )
+        if app_lifespan_ctx and app_lifespan_ctx.jira_client_auth:
+            if user_auth_type not in ["oauth", "pat"] or not selected_token:
+                raise ValueError(
+                    "Jira is configured for client-provided authentication. "
+                    "Provide X-Jira-Authorization: Token <PAT> on each request."
+                )
         # If OAuth or PAT token is present, create user-specific fetcher
         if user_auth_type in ["oauth", "pat"] and selected_token is not None:
             user_token = selected_token
@@ -350,6 +365,19 @@ async def get_confluence_fetcher(ctx: Context) -> ConfluenceFetcher:
         )
         user_auth_type = selected_auth_type
         logger.debug(f"get_confluence_fetcher: User auth type: {user_auth_type}")
+        # Enforce client-provided authentication when configured (no global fallback)
+        lifespan_ctx_dict = ctx.request_context.lifespan_context  # type: ignore
+        app_lifespan_ctx: MainAppContext | None = (
+            lifespan_ctx_dict.get("app_lifespan_context")
+            if isinstance(lifespan_ctx_dict, dict)
+            else None
+        )
+        if app_lifespan_ctx and app_lifespan_ctx.confluence_client_auth:
+            if user_auth_type not in ["oauth", "pat"] or not selected_token:
+                raise ValueError(
+                    "Confluence is configured for client-provided authentication. "
+                    "Provide X-Confluence-Authorization: Token <PAT> on each request."
+                )
         if user_auth_type in ["oauth", "pat"] and selected_token is not None:
             user_token = selected_token
             user_email = selected_email

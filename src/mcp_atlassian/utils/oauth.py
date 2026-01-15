@@ -808,16 +808,38 @@ class OAuthConfig:
 
         # Minimal OAuth configuration (user-provided tokens mode)
         elif oauth_enabled:
-            # Create minimal config that works with user-provided tokens
             logger.info(
-                "Creating minimal OAuth config for user-provided tokens (ATLASSIAN_OAUTH_ENABLE=true)"
+                "Creating minimal OAuth config for user-provided tokens "
+                "(ATLASSIAN_OAUTH_ENABLE=true)"
             )
+
+            # Resolve minimal instance details with prefix fallbacks
+            instance_type = (
+                (g("INSTANCE_TYPE")
+                or os.getenv("ATLASSIAN_OAUTH_INSTANCE_TYPE")
+                or "cloud")
+                .lower()
+            )
+            instance_url = g("INSTANCE_URL") or os.getenv("ATLASSIAN_OAUTH_INSTANCE_URL")
+            cloud_id = g("CLOUD_ID") or os.getenv("ATLASSIAN_OAUTH_CLOUD_ID")
+
+            # Data Center requires an explicit base URL
+            if instance_type == "datacenter" and not instance_url:
+                logger.error(
+                    "Minimal OAuth mode enabled for Data Center but INSTANCE_URL is "
+                    "missing. Provide e.g. CONFLUENCE_OAUTH_INSTANCE_URL or "
+                    "ATLASSIAN_OAUTH_INSTANCE_URL."
+                )
+                return None
+
             return cls(
-                client_id="",  # Will be provided by user tokens
-                client_secret="",  # Not needed for user tokens
-                redirect_uri="",  # Not needed for user tokens
-                scope="",  # Will be determined by user token permissions
-                cloud_id=os.getenv("ATLASSIAN_OAUTH_CLOUD_ID"),  # Optional fallback
+                client_id="",  # Provided later by user token (if ever needed)
+                client_secret="",
+                redirect_uri="",
+                scope="",
+                instance_type=instance_type,
+                instance_url=instance_url,
+                cloud_id=cloud_id,
             )
 
         # No OAuth configuration

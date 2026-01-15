@@ -394,3 +394,21 @@ class TestConfluenceDataCenterOAuth:
         )
 
         assert config.is_auth_configured() is False
+
+
+def test_from_env_client_auth_mode_success():
+    """Test from_env succeeds in client-auth mode without in-env token for DC."""
+    with patch.dict(
+        os.environ,
+        {
+            "CONFLUENCE_URL": "https://confluence.example.com",
+            "CONFLUENCE_CLIENT_AUTH": "true",
+        },
+        clear=True,
+    ):
+        config = ConfluenceConfig.from_env()
+        assert config.url == "https://confluence.example.com"
+        assert config.auth_type == "pat"
+        assert config.personal_token is None
+        # No env token, so not yet fully configured
+        assert config.is_auth_configured() is False

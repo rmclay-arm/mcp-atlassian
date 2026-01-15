@@ -44,17 +44,35 @@ async def main_lifespan(app: FastMCP[MainAppContext]) -> AsyncIterator[dict]:
     read_only = is_read_only_mode()
     enabled_tools = get_enabled_tools()
 
+    # Detect client-auth mode via environment flags
+    confluence_client_auth = (
+        str(os.getenv("CONFLUENCE_CLIENT_AUTH", "")).strip().lower()
+        in ("true", "1", "yes", "y", "on")
+    )
+    jira_client_auth = (
+        str(os.getenv("JIRA_CLIENT_AUTH", "")).strip().lower()
+        in ("true", "1", "yes", "y", "on")
+    )
+
     loaded_jira_config: JiraConfig | None = None
     loaded_confluence_config: ConfluenceConfig | None = None
+    jira_auth_ok = False
+    confluence_auth_ok = False
 
     if services.get("jira"):
         try:
             jira_config = JiraConfig.from_env()
-            if jira_config.is_auth_configured():
+            jira_auth_ok = jira_config.is_auth_configured()
+            if jira_auth_ok or jira_client_auth:
                 loaded_jira_config = jira_config
-                logger.info(
-                    "Jira configuration loaded and authentication is configured."
-                )
+                if jira_auth_ok:
+                    logger.info(
+                        "Jira configuration loaded and authentication is configured."
+                    )
+                else:
+                    logger.info(
+                        "Jira base configuration loaded; expecting auth via X-Jira-Authorization per request"
+                    )
             else:
                 logger.warning(
                     "Jira URL found, but authentication is not fully configured. Jira tools will be unavailable."
@@ -65,11 +83,17 @@ async def main_lifespan(app: FastMCP[MainAppContext]) -> AsyncIterator[dict]:
     if services.get("confluence"):
         try:
             confluence_config = ConfluenceConfig.from_env()
-            if confluence_config.is_auth_configured():
+            confluence_auth_ok = confluence_config.is_auth_configured()
+            if confluence_auth_ok or confluence_client_auth:
                 loaded_confluence_config = confluence_config
-                logger.info(
-                    "Confluence configuration loaded and authentication is configured."
-                )
+                if confluence_auth_ok:
+                    logger.info(
+                        "Confluence configuration loaded and authentication is configured."
+                    )
+                else:
+                    logger.info(
+                        "Confluence base configuration loaded; expecting auth via X-Confluence-Authorization per request"
+                    )
             else:
                 logger.warning(
                     "Confluence URL found, but authentication is not fully configured. Confluence tools will be unavailable."
@@ -82,6 +106,10 @@ async def main_lifespan(app: FastMCP[MainAppContext]) -> AsyncIterator[dict]:
         full_confluence_config=loaded_confluence_config,
         read_only=read_only,
         enabled_tools=enabled_tools,
+        confluence_client_auth=confluence_client_auth,
+        jira_client_auth=jira_client_auth,
+        confluence_auth_configured=confluence_auth_ok,
+        jira_auth_configured=jira_auth_ok,
     )
     logger.info(f"Read-only mode: {'ENABLED' if read_only else 'DISABLED'}")
     logger.info(f"Enabled tools filter: {enabled_tools or 'All tools enabled'}")

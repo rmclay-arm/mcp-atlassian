@@ -213,6 +213,32 @@ class TestGetAvailableServices:
             _assert_authentication_logs(caplog, "oauth", ["confluence", "jira"])
             assert "Basic Authentication" not in caplog.text
 
+    def test_client_auth_confluence_only(self, caplog):
+        """Confluence should be available when only client-provided auth is enabled."""
+        with MockEnvironment.clean_env():
+            import os
+
+            os.environ["CONFLUENCE_URL"] = "https://company.atlassian.net/wiki"
+            os.environ["CONFLUENCE_CLIENT_AUTH"] = "true"
+
+            result = get_available_services()
+            _assert_service_availability(
+                result, confluence_expected=True, jira_expected=False
+            )
+
+            # Verify log message for Confluence client-provided auth
+            assert_log_contains(
+                caplog,
+                "INFO",
+                "Using Confluence client-provided authentication via headers",
+            )
+            # Jira should remain not configured
+            assert_log_contains(
+                caplog,
+                "INFO",
+                "Jira is not configured or required environment variables are missing.",
+            )
+
     def test_mixed_service_configuration(self, caplog):
         """Test mixed configurations where only one service is configured."""
         with MockEnvironment.clean_env():
