@@ -87,6 +87,21 @@ docker run -d \
 
 ---
 
+### Storage seam and Disk backend (Phase 1)
+
+Central OAuth now exposes a well-defined *storage seam* between the token-management
+core and the persistence layer.  In **Phase 1** the default implementation is
+`DiskAuthStore`, a JSON-file backend that provides:
+
+* Atomic writes via *temp-file + os.replace*
+* Single-consumer semantics for one-time auth transactions
+* Advisory file-lock leases ensuring only one process refreshes a token set
+* Pluggability – alternative stores (SQLite, Postgres, DynamoDB) can replace
+  the disk store by implementing the `AuthStore` protocol.
+
+> **Note** This section is a placeholder – detailed backend comparison and
+> benchmarking will be documented in Phase 2.
+
 ## Future (Phase 2+) Preview
 
 | Capability | Status |
