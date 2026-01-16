@@ -7,6 +7,7 @@ to provide efficient, reusable test fixtures.
 """
 
 import pytest
+import os
 
 from tests.utils.factories import (
     AuthConfigFactory,
@@ -363,3 +364,29 @@ def validate_test_environment():
 
     # Log session end
     print("\n✅ Completed MCP Atlassian test session")
+
+
+def pytest_configure(config):
+    """Register custom markers for the test suite."""
+    config.addinivalue_line(
+        "markers",
+        "live: mark tests that require a live MCP server and real Atlassian instances",
+    )
+
+
+def pytest_runtest_setup(item):
+    """
+    Conditionally skip tests marked with ``@pytest.mark.live``.
+
+    A live test will only run when BOTH conditions are met:
+    1. pytest is invoked with ``-m live`` (marker selection), AND
+    2. the environment variable ``MCP_LIVE=1`` is set.
+
+    In addition, ``MCP_LINK_CODE`` must be present because live tests
+    authenticate requests using the Link Code header.
+    """
+    if item.get_closest_marker("live"):
+        if os.getenv("MCP_LIVE") != "1":
+            pytest.skip("Live tests disabled: set MCP_LIVE=1 to enable")
+        if not os.getenv("MCP_LINK_CODE"):
+            pytest.skip("MCP_LINK_CODE env var is required for live tests")
