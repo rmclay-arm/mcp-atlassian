@@ -78,3 +78,7 @@ playground/
 
 # Local AGENTS file
 AGENTS.local.md
+
+# Project local state
+.project-local/
+!.project-local/state.example.json
