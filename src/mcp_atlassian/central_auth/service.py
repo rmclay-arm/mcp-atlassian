@@ -19,6 +19,7 @@ import logging
 import os
 import uuid
 from typing import Final, Literal, Any
+from urllib.parse import urlencode
 
 from pathlib import Path
 
@@ -56,7 +57,7 @@ _CLIENT_SECRETS: dict[Product, str] = {
 }
 
 _SCOPE_DEFAULTS: dict[Product, str] = {
-    "jira": "read:jira-user read:jira-work write:jira-work",
+    "jira": "WRITE",
     "confluence": "read:confluence-content write:confluence-content",
 }
 
@@ -135,19 +136,26 @@ class CentralAuthService:
         self.store.create_auth_txn(txn)
 
         state = build_state(auth_txn_id, self._state_secret)
-        scope_val = scope or _SCOPE_DEFAULTS[product]
+        # Determine scope: explicit arg > ENV > default
+        env_scope_key = f"{product.upper()}_OAUTH_SCOPE"
+        scope_env = os.getenv(env_scope_key)
+        scope_val = scope or scope_env or _SCOPE_DEFAULTS[product]
 
-        url = (
-            f"{authorize_base}"
-            f"?audience=api.atlassian.com"  # Atlassian specific
-            f"&client_id={client_id}"
-            f"&scope={scope_val}"
-            f"&redirect_uri={redirect_uri}"
-            f"&state={state}"
-            f"&response_type=code"
-            f"&code_challenge={challenge}"
-            f"&code_challenge_method=S256"
-        )
+        query_params: dict[str, str] = {
+            "client_id": client_id,
+            "scope": scope_val,
+            "redirect_uri": redirect_uri,
+            "state": state,
+            "response_type": "code",
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+        }
+
+        # Include audience only for Atlassian Cloud centralized auth
+        if "auth.atlassian.com" in authorize_base:
+            query_params["audience"] = "api.atlassian.com"
+
+        url = f"{authorize_base}?{urlencode(query_params)}"
 
         _LOG.debug(
             "Built authorize URL for txn=%s**** state=%s****",

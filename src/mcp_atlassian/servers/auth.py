@@ -97,6 +97,16 @@ def register_auth_routes(app: "AtlassianMCP", *, base_path: str = "/auth") -> No
     )
     async def _oauth_callback(request: Request) -> Response:  # noqa: D401
         product: Literal["jira", "confluence"] = request.path_params["product"]
+        # Check for provider-side errors first (e.g., invalid_scope, access_denied)
+        oauth_error = request.query_params.get("error")
+        if oauth_error:
+            description = request.query_params.get("error_description", "")
+            return _html_page(
+                "Authorization error",
+                f"{oauth_error}: {description}" if description else oauth_error,
+                400,
+            )
+
         code = request.query_params.get("code")
         state = request.query_params.get("state")
 
