@@ -5,6 +5,54 @@ All instructions are generic and free of internal URLs or secrets.
 
 ---
 
+## Browser-based OAuth Flow (Phase 1)
+
+The Central OAuth Service exposes a **browser-based device flow** under a configurable
+base path (default `/auth`).  
+If you run the MCP server behind a reverse-proxy you may remap the path at
+application bootstrap:
+
+```python
+from mcp_atlassian.servers.main import main_mcp
+from mcp_atlassian.servers.auth import register_auth_routes
+
+register_auth_routes(main_mcp, base_path="/custom/auth")   # override example
+```
+
+### Endpoints
+
+Method | Path | Purpose
+-------|------|--------
+`GET` | `{base}/link/new` | Generate a one-time **link code** that binds a headless client to a browser session.
+`GET` | `{base}/{jira&#124;confluence}/start?instance=<id>&redirect_uri=<url>` | Build the provider **authorize_url** that the browser should visit.
+`GET` | `{base}/{jira&#124;confluence}/callback?code=…&state=…` | OAuth redirect target. Returns a minimal success/failure HTML page (no secrets).
+`GET` | `{base}/status?instance=<id>` | Poll binding / token status for an instance.
+`POST` | `{base}/{jira&#124;confluence}/disconnect` (JSON `{"instance": "<id>"}`) | Revoke and delete stored tokens.
+
+### Flow sequence
+
+1. **Client** requests `GET {base}/link/new` → receives `link_code`.
+2. **Client** opens browser to  
+   `{base}/{product}/start?instance=<id>&redirect_uri=<callback>`  
+   and follows the returned `authorize_url`.
+3. Atlassian completes OAuth and redirects to  
+   `{base}/{product}/callback` which shows *Authorization successful/failed*.
+4. **Client** polls `GET {base}/status?instance=<id>` until tokens are ready.
+5. Optional: `POST {base}/{product}/disconnect` removes credentials.
+
+### Correlation IDs
+
+Every HTTP request is tagged with an `X-Correlation-ID` header (random UUID4 if
+absent). The value is echoed in the response and injected into structured logs,
+allowing end-to-end tracing without exposing secrets.
+
+### Storage
+
+Tokens and transient state are stored on disk by **DiskAuthStore**.  
+Directory is controlled by env `MCP_AUTH_STORAGE_DIR` (default
+`~/.mcp-atlassian/auth`). When containerised, mount this path as a **persistent
+volume**.
+
 ## 1. Service Lifecycle
 
 | Action | Command (container example) | Notes |
@@ -79,7 +127,8 @@ Variable | Default | Description
 `CENTRAL_OAUTH_DB_PATH` | `/var/lib/central-oauth/db.sqlite3` | Location of SQLite file
 `CENTRAL_OAUTH_SECRET_KEY` | *none* | 32-byte hex used for AES-GCM
 `CENTRAL_OAUTH_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`
-`CENTRAL_OAUTH_KEY_RING` | *same as SECRET* | Comma list of active keys (newest first)
+`CENTRAL_OAUTH_KEY_RING` | *same as SECRET* | Comma list of active keys (newest first)  
+`MCP_AUTH_STORAGE_DIR` | `~/.mcp-atlassian/auth` | Base directory for on-disk token store (`DiskAuthStore`)
 
 ---
 
