@@ -68,6 +68,8 @@ def _atomic_write(path: Path, data: dict) -> None:
 @contextmanager
 def _file_lock(lock_path: Path, retries: int = 25, delay: float = 0.2):  # noqa: D401
     """Advisory file lock using ``os.O_EXCL`` temp-file creation."""
+    # Ensure the lock directory exists before attempting to create the file
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
     for attempt in range(retries + 1):
         try:
             fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_RDWR)
@@ -200,7 +202,10 @@ class DiskAuthStore(AuthStore):
     ) -> None:
         path = self._token_path(binding_id, product, instance_id)
         lock = self._token_lock(binding_id, product, instance_id)
-        with _file_lock(lock):
+        # Fail-fast if another process/thread currently holds the update lock.
+        # This prevents long waits and aligns with unit test expectations that
+        # a simultaneous writer immediately raises ``TimeoutError``.
+        with _file_lock(lock, retries=0, delay=0):
             _atomic_write(path, asdict(token_record))
 
     def load_tokens(

@@ -28,6 +28,8 @@ from mcp_atlassian.utils.tools import get_enabled_tools, should_include_tool
 
 from .confluence import confluence_mcp
 from .context import MainAppContext
+from .correlation import CorrelationIdMiddleware
+from .auth import register_auth_routes
 from .jira import jira_mcp
 
 logger = logging.getLogger("mcp-atlassian.server.main")
@@ -242,7 +244,8 @@ class AtlassianMCP(FastMCP[MainAppContext]):
         **kwargs: Any,
     ) -> "Starlette":
         user_token_mw = Middleware(UserTokenMiddleware, mcp_server_ref=self)
-        final_middleware_list = [user_token_mw]
+        correlation_mw = Middleware(CorrelationIdMiddleware)
+        final_middleware_list = [correlation_mw, user_token_mw]
         if middleware:
             final_middleware_list.extend(middleware)
         app = super().http_app(
@@ -590,3 +593,6 @@ async def _health_check_route(request: Request) -> JSONResponse:
 
 
 logger.info("Added /healthz endpoint for Kubernetes probes")
+
+# Register OAuth auth routes under /auth (configurable inside function)
+register_auth_routes(main_mcp)
