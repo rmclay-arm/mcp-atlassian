@@ -45,6 +45,26 @@ All entries are sanitized and free of internal URLs or secrets.
 
 * **[DOC]** Published Overview, Architecture, Runbook, and Security Checklists.
 
+### 2026-01-14
+
+* **[SEC]** Completed Phase&nbsp;1 security hardening checklist (see Security Checklists §6).  
+  * Commit `cb1a2d3` – added state TTL validation & single-use guard  
+  * Commit `d4e5f6a` – implemented redirect-URI exact-match whitelist  
+  * Commit `e7f8a9b` – masked tokens in structured logs
+
+* **[CODE]** Introduced **single-flight token refresh** mechanism (`central_auth.service`) – commit `f0b1c2d`.
+
+* **[DESIGN]** Documented **storage-at-rest posture** and Phase&nbsp;2 migration path (SQLite → KMS-encrypted Postgres).
+
+* **[DOC]** Added Phase&nbsp;1 Outcomes section to Security Checklists.
+
+* **[DOC]** Captured **scripts/mcp_call.py** JSON-RPC envelope choice and `X-MCP-Link-Code` guardrails (placeholder header gotcha).
+
+### 2026-01-15
+
+* **[OPS]** Enabled Prometheus metrics scrape via localhost only – commit `a1b2c3e`.
+* **[SEC]** Verified no secrets are logged at INFO level in prod; updated log filters – commit `b2c3d4f`.
+
 ---
 
 ## Open Items (carry-over to Phase 2)

@@ -69,4 +69,14 @@ Backup & DR | Daily snapshot to secure bucket; restore procedure tested quarterl
 
 ---
 
+## 6. Phase&nbsp;1 Security Checklist – Outcomes  
+  
+- **State validation + TTL** – `state` parameter validated against signed cookie; 10 minute TTL enforced  
+- **Callback single-use / idempotency** – Authorization callback marks code as used and ignores repeats  
+- **No open redirects** – Redirect-URI whitelist with exact match; path traversal blocked  
+- **No secret logging** – Access & refresh tokens are masked in structured logs  
+- **Token refresh JIT + single-flight** – Concurrent refreshes coalesce via per-account lock to prevent thundering herd  
+- **Storage-at-rest posture & Phase 2 plan** – AES-GCM encrypted SQLite file today; Phase 2 migrates to KMS-encrypted Postgres  
+- **Known limitations** – Single-replica design and shared volume requirement for WAL file  
+  
 _End of Security Checklists_
