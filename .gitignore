@@ -82,3 +82,8 @@ AGENTS.local.md
 # Project local state
 .project-local/
 !.project-local/state.example.json
+
+# Script helper env files
+scripts/.env.script-helpers
+scripts/.env.script-helpers.*
+!scripts/.env.script-helpers.example

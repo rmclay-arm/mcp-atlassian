@@ -3,6 +3,9 @@
 This runbook provides **day-2 operational guidance** for the Central OAuth Service (Phase 1).  
 All instructions are generic and free of internal URLs or secrets.
 
+> **Publishing note:** Update this runbook in Confluence via  
+> `scripts/publish_confluence_runbook.py` to avoid JSON-in-JSON escaping issues.
+
 ---
 
 ## Browser-based OAuth Flow (Phase 1)
@@ -29,6 +32,20 @@ Method | Path | Purpose
 `GET` | `{base}/status?instance=<id>` | Poll binding / token status for an instance.
 `POST` | `{base}/{jira&#124;confluence}/disconnect` (JSON `{"instance": "<id>"}`) | Revoke and delete stored tokens.
 
+### Binding Header (Link Code)
+
+All subsequent **tool calls** must include a binding header that links the
+request to the authorised account:
+
+```
+Header: X-MCP-Link-Code: <link_code>
+```
+
+The header name is configurable via the environment variable
+`MCP_LINK_HEADER_NAME` (default `X-MCP-Link-Code`).  
+The server resolves the link code to an OAuth access token and injects it
+automatically. The header value never leaves the server.
+
 ### Flow sequence
 
 1. **Client** requests `GET {base}/link/new` → receives `link_code`.
@@ -37,8 +54,30 @@ Method | Path | Purpose
    and follows the returned `authorize_url`.
 3. Atlassian completes OAuth and redirects to  
    `{base}/{product}/callback` which shows *Authorization successful/failed*.
-4. **Client** polls `GET {base}/status?instance=<id>` until tokens are ready.
-5. Optional: `POST {base}/{product}/disconnect` removes credentials.
+4. **Client** polls `GET {base}/status?instance=<id>` until tokens are **READY**.
+5. Subsequent **tool calls** include  
+   `X-MCP-Link-Code: <link_code>` and succeed automatically.  
+   Tokens are refreshed transparently by the server.
+6. If a call returns **NeedsReauth** (see below), repeat the browser flow.
+7. Optional: `POST {base}/{product}/disconnect` removes stored credentials.
+
+### NeedsReauth Response
+
+When an access token has expired or been revoked **and** cannot be refreshed,
+the server responds to tool calls with HTTP `412 Precondition Failed` and a JSON
+body like:
+
+```json
+{
+  "error": "NeedsReauth",
+  "instance": "<id>",
+  "product": "jira",
+  "auth_url": "/auth/jira/start?instance=<id>&redirect_uri=<callback>"
+}
+```
+
+Clients should open `auth_url` in a browser, complete the OAuth flow, and then
+resume polling `/status` until the instance reports **READY**.
 
 ### Correlation IDs
 

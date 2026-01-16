@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import os
+import hashlib
 from typing import TYPE_CHECKING, Any, Literal
 
 from fastmcp import Context
@@ -17,6 +19,8 @@ from mcp_atlassian.confluence import ConfluenceConfig, ConfluenceFetcher
 from mcp_atlassian.jira import JiraConfig, JiraFetcher
 from mcp_atlassian.servers.context import MainAppContext
 from mcp_atlassian.utils.oauth import OAuthConfig
+from mcp_atlassian.central_auth.store import default_store
+from mcp_atlassian.central_auth.errors import NeedsReauthError
 
 if TYPE_CHECKING:
     from mcp_atlassian.confluence.config import (
@@ -25,6 +29,17 @@ if TYPE_CHECKING:
     from mcp_atlassian.jira.config import JiraConfig as UserJiraConfigType
 
 logger = logging.getLogger("mcp-atlassian.servers.dependencies")
+
+# --------------------------------------------------------------------------- #
+# Binding header helpers (Phase 1)
+# --------------------------------------------------------------------------- #
+
+_BINDING_HEADER_NAME: str = os.getenv("MCP_LINK_CODE_HEADER", "X-MCP-Link-Code")
+
+
+def _binding_id_from_code(link_code: str) -> str:
+    """Derive a stable, filesystem-safe binding_id from the raw link_code."""
+    return hashlib.sha256(link_code.encode("utf-8")).hexdigest()[:12]
 
 
 def _create_user_config_for_fetcher(
@@ -234,6 +249,36 @@ async def get_jira_fetcher(ctx: Context) -> JiraFetcher:
             f"State.user_auth_type: {getattr(request.state, 'user_atlassian_auth_type', 'N/A')}. "
             f"State.user_token_present: {hasattr(request.state, 'user_atlassian_token') and request.state.user_atlassian_token is not None}."
         )
+
+        # ------------------------------------------------------------------
+        # Phase-1 binding header token resolution
+        # ------------------------------------------------------------------
+        link_code = request.headers.get(_BINDING_HEADER_NAME)
+        if link_code and not getattr(request.state, "user_jira_token", None):
+            binding_id = _binding_id_from_code(link_code)
+            token_rec = default_store().load_tokens(binding_id, "jira", "default")
+            if token_rec:
+                request.state.user_jira_token = token_rec.access_token
+                request.state.user_jira_auth_type = "oauth"
+                request.state.user_jira_cloud_id = token_rec.cloud_id
+                # Mirror into legacy generic slots for backward-compat
+                request.state.user_atlassian_token = token_rec.access_token
+                request.state.user_atlassian_auth_type = "oauth"
+                request.state.user_atlassian_cloud_id = token_rec.cloud_id
+                logger.info(
+                    "Resolved Jira OAuth token via binding header for binding_id=%s",
+                    binding_id,
+                )
+            else:
+                logger.info(
+                    "No Jira tokens found for binding_id=%s – re-authentication required",
+                    binding_id,
+                )
+                raise NeedsReauthError(
+                    auth_txn_id="binding-" + binding_id,
+                    product="jira",
+                    message="No stored tokens for provided link code",
+                )
         # Use fetcher from request.state if already present
         if hasattr(request.state, "jira_fetcher") and request.state.jira_fetcher:
             logger.debug("get_jira_fetcher: Returning JiraFetcher from request.state.")
@@ -352,6 +397,36 @@ async def get_confluence_fetcher(ctx: Context) -> ConfluenceFetcher:
             f"State.user_auth_type: {getattr(request.state, 'user_atlassian_auth_type', 'N/A')}. "
             f"State.user_token_present: {hasattr(request.state, 'user_atlassian_token') and request.state.user_atlassian_token is not None}."
         )
+
+        # ------------------------------------------------------------------
+        # Phase-1 binding header token resolution
+        # ------------------------------------------------------------------
+        link_code = request.headers.get(_BINDING_HEADER_NAME)
+        if link_code and not getattr(request.state, "user_confluence_token", None):
+            binding_id = _binding_id_from_code(link_code)
+            token_rec = default_store().load_tokens(binding_id, "confluence", "default")
+            if token_rec:
+                request.state.user_confluence_token = token_rec.access_token
+                request.state.user_confluence_auth_type = "oauth"
+                request.state.user_confluence_cloud_id = token_rec.cloud_id
+                # Mirror into legacy generic slots for backward-compat
+                request.state.user_atlassian_token = token_rec.access_token
+                request.state.user_atlassian_auth_type = "oauth"
+                request.state.user_atlassian_cloud_id = token_rec.cloud_id
+                logger.info(
+                    "Resolved Confluence OAuth token via binding header for binding_id=%s",
+                    binding_id,
+                )
+            else:
+                logger.info(
+                    "No Confluence tokens found for binding_id=%s – re-authentication required",
+                    binding_id,
+                )
+                raise NeedsReauthError(
+                    auth_txn_id="binding-" + binding_id,
+                    product="confluence",
+                    message="No stored tokens for provided link code",
+                )
         if (
             hasattr(request.state, "confluence_fetcher")
             and request.state.confluence_fetcher

@@ -20,6 +20,13 @@ import os
 import uuid
 from typing import Final, Literal, Any
 
+from pathlib import Path
+
+from mcp_atlassian.central_auth.clock import Clock, default_clock
+from mcp_atlassian.central_auth.errors import NeedsReauthError
+from mcp_atlassian.utils.oauth import OAuthConfig
+from mcp_atlassian.central_auth.store import _file_lock  # type: ignore
+
 from mcp_atlassian.central_auth.models import AuthTxnRecord, TokenRecord
 from mcp_atlassian.central_auth.pkce import code_challenge_s256, generate_code_verifier
 from mcp_atlassian.central_auth.state import build_state, parse_state
@@ -194,3 +201,119 @@ class CentralAuthService:
         """Delete stored tokens."""
         self.store.delete_tokens("default", product, instance_id)
         _LOG.debug("Deleted tokens product=%s instance=%s", product, instance_id)
+
+    # ------------------------------------------------------------------ #
+    # Token access & JIT refresh                                         #
+    # ------------------------------------------------------------------ #
+    def get_access_token(
+        self,
+        *,
+        binding_id: str,
+        product: Product,
+        instance_id: str,
+        clock: Clock = default_clock,
+        grace_seconds: int = 120,
+    ) -> str:
+        """Return a valid access token, refreshing on-demand.
+
+        Implements single-flight behaviour: only one refresh runs at a time
+        per (binding_id, product, instance_id) by leveraging the store’s
+        advisory file-lock.  Callers that lose the lock fail fast so upstream
+        HTTP handlers can retry shortly.
+        """
+        _ensure_product(product)
+
+        rec = self.store.load_tokens(binding_id, product, instance_id)
+        if rec is None:
+            raise NeedsReauthError(
+                auth_txn_id=f"missing-{binding_id}",
+                product=product,
+                message="No stored credentials",
+            )
+
+        now = int(clock())
+        if (rec.expires_at - now) > grace_seconds:
+            return rec.access_token
+
+        # Attempt single-flight refresh
+        lock_path: Path = self.store._token_lock(binding_id, product, instance_id)  # type: ignore[attr-defined]
+        try:
+            with _file_lock(lock_path, retries=0, delay=0):
+                # Another thread/process may have refreshed while we waited.
+                latest = self.store.load_tokens(binding_id, product, instance_id)
+                if latest and (latest.expires_at - now) > grace_seconds:
+                    return latest.access_token
+
+                refreshed_token = self._refresh_tokens(
+                    binding_id=binding_id,
+                    product=product,
+                    instance_id=instance_id,
+                    token_record=rec,
+                    clock=clock,
+                )
+                return refreshed_token
+        except TimeoutError:
+            # A concurrent refresh is in-flight. Advise caller to retry.
+            raise NeedsReauthError(
+                auth_txn_id=f"refresh-in-flight-{binding_id}",
+                product=product,
+                message="Token refresh in progress; retry soon.",
+            ) from None
+
+    # ---------------- internal helpers --------------------------------- #
+    def _refresh_tokens(
+        self,
+        *,
+        binding_id: str,
+        product: Product,
+        instance_id: str,
+        token_record: TokenRecord,
+        clock: Clock,
+    ) -> str:
+        """Refresh the OAuth access token and persist the updated record."""
+        client_id = _CLIENT_IDS[product]
+        client_secret = _CLIENT_SECRETS[product]
+        redirect_uri = _REDIRECT_URIS[product]
+        scope = _SCOPE_DEFAULTS[product]
+
+        instance_type = "cloud" if token_record.cloud_id else "datacenter"
+
+        oauth_cfg = OAuthConfig(
+            client_id=client_id,
+            client_secret=client_secret,
+            redirect_uri=redirect_uri,
+            scope=scope,
+            access_token=token_record.access_token,
+            refresh_token=token_record.refresh_token,
+            expires_at=token_record.expires_at,
+            cloud_id=token_record.cloud_id,
+            instance_type=instance_type,
+            instance_url=token_record.instance_url,
+        )
+
+        if not oauth_cfg.refresh_access_token():
+            raise NeedsReauthError(
+                auth_txn_id=f"refresh-failed-{binding_id}",
+                product=product,
+                message="Failed to refresh OAuth token",
+            )
+
+        new_rec = TokenRecord(
+            access_token=oauth_cfg.access_token or "",
+            refresh_token=oauth_cfg.refresh_token,
+            obtained_at=int(clock()),
+            expires_at=int(oauth_cfg.expires_at or 0),
+            cloud_id=oauth_cfg.cloud_id,
+            instance_url=oauth_cfg.instance_url,
+        )
+
+        # Persist while still holding the lock
+        self.store.save_tokens(binding_id, product, instance_id, new_rec)
+
+        _LOG.info(
+            "Refreshed %s access token for binding_id=%s**** (expires in %ss)",
+            product,
+            binding_id[:6],
+            new_rec.ttl,
+        )
+        return new_rec.access_token

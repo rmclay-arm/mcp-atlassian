@@ -15,6 +15,8 @@ from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
+from mcp_atlassian.central_auth.errors import NeedsReauthError
+from mcp_atlassian.central_auth.service import CentralAuthService
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from mcp_atlassian.confluence import ConfluenceFetcher
@@ -251,6 +253,34 @@ class AtlassianMCP(FastMCP[MainAppContext]):
         app = super().http_app(
             path=path, middleware=final_middleware_list, transport=transport, **kwargs
         )
+
+        # ------------------------------------------------------------------
+        # Global NeedsReauthError → 401 JSON handler (Phase-1 OAuth plumbing)
+        # ------------------------------------------------------------------
+        if NeedsReauthError not in app.exception_handlers:
+            central_auth_svc = CentralAuthService()
+
+            async def _needs_reauth_handler(  # noqa: D401
+                request: Request, exc: NeedsReauthError
+            ) -> JSONResponse:
+                product = exc.product
+                instance_id = "default"
+                # Build safe start URL (no user-controlled redirect_uri)
+                start_url = f"/auth/{product}/start?instance={instance_id}"
+                payload = {
+                    "error": "needs_reauth",
+                    "product": product,
+                    "instance_id": instance_id,
+                    "start_url": start_url,
+                }
+                # Include correlation_id if available for troubleshooting
+                corr_id = getattr(request.state, "correlation_id", None)
+                if corr_id:
+                    payload["correlation_id"] = corr_id
+                return JSONResponse(payload, status_code=401)
+
+            app.add_exception_handler(NeedsReauthError, _needs_reauth_handler)
+
         return app
 
 
