@@ -46,6 +46,8 @@ The header name is configurable via the environment variable
 The server resolves the link code to an OAuth access token and injects it
 automatically. The header value never leaves the server.
 
+> **Note:** The **effective identity** for any tool call is determined by which authentication header path is used—either the link-code header or direct product-specific auth headers. Permissions are evaluated against that effective identity.
+
 ### Flow sequence
 
 1. **Client** requests `GET {base}/link/new` → receives `link_code`.
