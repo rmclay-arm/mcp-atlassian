@@ -11,12 +11,16 @@ def pytest_configure(config):
 
 
 def pytest_collection_modifyitems(config, items):
-    """Skip integration tests unless explicitly requested."""
+    """Skip integration tests unless explicitly requested.
+
+    Tests marked with 'ci_safe' are always run (even inside the integration
+    directory) because they stub all external calls and are safe for CI.
+    """
     if not config.getoption("--integration", default=False):
-        # Skip integration tests by default
+        # Skip integration tests by default, but honor ci_safe override
         skip_integration = pytest.mark.skip(reason="Need --integration option to run")
         for item in items:
-            if "integration" in item.keywords:
+            if "integration" in item.keywords and "ci_safe" not in item.keywords:
                 item.add_marker(skip_integration)
 
 
