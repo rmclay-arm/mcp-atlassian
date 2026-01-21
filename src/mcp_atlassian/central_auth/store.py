@@ -47,6 +47,16 @@ def _hash(text: str, length: int = 12) -> str:
     return sha256(text.encode()).hexdigest()[:length]
 
 
+def binding_id_from_link_code(link_code: str, *, length: int = 12) -> str:
+    """Return the deterministic binding_id derived from a link_code.
+
+    All components must use this helper so tokens are stored and looked-up
+    under the same hashed identifier. The implementation delegates to the
+    internal ``_hash`` helper to guarantee identical behaviour.
+    """
+    return _hash(link_code, length)
+
+
 def _slug(text: str, max_len: int = 80) -> str:
     """Filesystem-safe slug (borrowed from utils.oauth)."""
     import re

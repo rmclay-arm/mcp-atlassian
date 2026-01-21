@@ -69,6 +69,7 @@ def register_auth_routes(app: "AtlassianMCP", *, base_path: str = "/auth") -> No
     async def _start_oauth(request: Request) -> Response:  # noqa: D401
         product: Literal["jira", "confluence"] = request.path_params["product"]
         instance = request.query_params.get("instance", "default")
+        link_code: str | None = request.query_params.get("link_code")
         redirect_uri = request.query_params.get("redirect_uri")
 
         if not redirect_uri:
@@ -79,6 +80,7 @@ def register_auth_routes(app: "AtlassianMCP", *, base_path: str = "/auth") -> No
                 product=product,
                 instance_id=instance,
                 redirect_uri=redirect_uri,
+                link_code=link_code,
             )
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)

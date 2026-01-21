@@ -8,7 +8,9 @@ from __future__ import annotations
 import dataclasses
 import logging
 import os
-import hashlib
+from mcp_atlassian.central_auth.store import (
+    binding_id_from_link_code as _binding_id_from_code,
+)
 from typing import TYPE_CHECKING, Any, Literal
 
 from fastmcp import Context
@@ -37,9 +39,7 @@ logger = logging.getLogger("mcp-atlassian.servers.dependencies")
 _BINDING_HEADER_NAME: str = os.getenv("MCP_LINK_CODE_HEADER", "X-MCP-Link-Code")
 
 
-def _binding_id_from_code(link_code: str) -> str:
-    """Derive a stable, filesystem-safe binding_id from the raw link_code."""
-    return hashlib.sha256(link_code.encode("utf-8")).hexdigest()[:12]
+# Re-exported alias imported above for backward compatibility
 
 
 def _create_user_config_for_fetcher(

@@ -18,6 +18,9 @@ class AuthTxnRecord:
     product: str
     code_verifier: str
     code_challenge: str
+    # New fields for link-code binding & instance scoping (Phase-1 LiveFix)
+    binding_id: str = "default"
+    instance_id: str = "default"
     created_at: int = field(default_factory=lambda: int(default_clock()))
     # The transaction is considered stale after 15 minutes by default
     ttl_seconds: int = 900

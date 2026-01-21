@@ -139,6 +139,54 @@ Never share API tokens. Keep `.env` files secure. See [SECURITY.md](SECURITY.md)
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup.
 
+## Local Smoke Test (Link-Code Jira)
+
+Run a quick end-to-end validation of:
+
+* brand-new **link-code minting**
+* centralized OAuth token resolution
+* a minimal `jira_get_issue` call that prints and (optionally) asserts the
+  issue summary for **EXPL-777**
+
+```bash
+# 1) Export runtime variables (placeholders shown)
+export MCP_URL="http://localhost:9010/mcp"              # required
+export JIRA_SMOKE_ISSUE_KEY="EXPL-777"                    # optional, default shown
+export SMOKE_INTERACTIVE=1                              # optional, prompts for OAuth and retries once
+export SMOKE_EXPECT_SUMMARY="TEST TICKET SUMMARY"             # optional strict assertion
+export SMOKE_EXPECT_DESCRIPTION_SUBSTR="TEST DESCRIPTION"  # optional substring match
+
+# 2) Run the deterministic smoke script
+bash scripts/smoke_linkcode_jira.sh
+```
+
+Key behaviours  
+--------------  
+* The script always **mints a new link code** (`/auth/link/new`) – every run is isolated and requires fresh authorization – and saves it to  
+  `.project-local/smoke/link_code.txt` along with raw JSON artefacts:
+  * `tools_list.json`
+  * `jira_get_issue.json`
+* If the new link code is **not yet authorized**, the script prints a safe
+  browser URL such as (no secrets included):
+
+  ```
+  http://localhost:9010/auth/jira/start?link_code=<minted_code>
+  ```
+
+  If `SMOKE_INTERACTIVE=1` the script will wait and **retry automatically** after you press Enter. Otherwise, complete the OAuth flow in the browser and **re-run** the script.
+* On successful authorization the script exits `0` and prints, e.g.:
+
+  ```
+  EXPL-777: DS5 PCE??????
+  ```
+
+  (and will fail if summary/description expectations are set and don’t match).
+
+Secrets safety – no `X-Jira-Authorization` header is needed and all
+link-codes/tokens remain only in `.project-local/` which is **git-ignored**.
+
+---
+
 ## License
 
 MIT - See [LICENSE](LICENSE). Not an official Atlassian product.

@@ -419,7 +419,7 @@ class OAuthConfig:
         client_part = OAuthConfig._slugify(client_id, max_len=32)
         hint_part = OAuthConfig._slugify(hint, max_len=40)
 
-        # Example: oauth-<client>-datacenter-uat.confluence.arm.com-1a2b3c4d5e6f
+        # Example: oauth-<client>-datacenter-uat.confluence.com-1a2b3c4d5e6f
         return f"oauth-{client_part}-{it}-{hint_part}-{digest}"
 
     def _storage_id(self) -> str:

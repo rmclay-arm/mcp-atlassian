@@ -26,7 +26,10 @@ from pathlib import Path
 from mcp_atlassian.central_auth.clock import Clock, default_clock
 from mcp_atlassian.central_auth.errors import NeedsReauthError
 from mcp_atlassian.utils.oauth import OAuthConfig
-from mcp_atlassian.central_auth.store import _file_lock  # type: ignore
+from mcp_atlassian.central_auth.store import (
+    _file_lock,  # type: ignore
+    binding_id_from_link_code,
+)
 
 from mcp_atlassian.central_auth.models import AuthTxnRecord, TokenRecord
 from mcp_atlassian.central_auth.pkce import code_challenge_s256, generate_code_verifier
@@ -110,6 +113,7 @@ class CentralAuthService:
         instance_id: str,
         redirect_uri: str,
         scope: str | None = None,
+        link_code: str | None = None,
     ) -> str:
         """Return the provider authorize URL (with PKCE & state)."""
         _ensure_product(product)
@@ -118,6 +122,11 @@ class CentralAuthService:
         client_id = _CLIENT_IDS[product]
         if not authorize_base or not client_id:
             raise ValueError(f"{product} OAuth environment not configured")
+
+        # Derive binding identity from link_code (phase-1 LiveFix)
+        binding_id: str = (
+            binding_id_from_link_code(link_code) if link_code else "default"
+        )
 
         # PKCE
         code_verifier = generate_code_verifier()
@@ -132,6 +141,8 @@ class CentralAuthService:
             product=product,
             code_verifier=code_verifier,
             code_challenge=challenge,
+            binding_id=binding_id,
+            instance_id=instance_id,
         )
         self.store.create_auth_txn(txn)
 
@@ -174,23 +185,74 @@ class CentralAuthService:
         if not txn:
             raise ValueError("invalid or expired transaction")
 
-        # Phase-1: DO NOT call real token endpoint – store placeholder
-        token = f"demo-{uuid.uuid4().hex}"
+        # ------------------------------------------------------------------
+        # Real token exchange for Jira/Confluence Data Center OAuth 2.0
+        # ------------------------------------------------------------------
+        import requests  # local import to avoid mandatory dep for non-OAuth paths
+
+        # Build token endpoint URL (replace '/authorize' with '/token')
+        authorize_base = _AUTH_URLS[product]
+        if not authorize_base:
+            raise ValueError(f"{product} OAuth environment not configured")
+
+        if authorize_base.endswith("/authorize"):
+            token_url = authorize_base.rsplit("/authorize", 1)[0] + "/token"
+        else:
+            token_url = f"{authorize_base.rstrip('/')}/token"
+
+        payload: dict[str, str] = {
+            "grant_type": "authorization_code",
+            "client_id": txn.client_id,
+            "code": code,
+            "redirect_uri": txn.redirect_uri,
+            "code_verifier": txn.code_verifier,
+        }
+        client_secret = _CLIENT_SECRETS.get(product) or ""
+        if client_secret:
+            payload["client_secret"] = client_secret  # noqa: S105
+
+        try:
+            resp = requests.post(token_url, data=payload, timeout=(5, 20))
+        except Exception as exc:  # pragma: no cover
+            raise RuntimeError(f"Token request failed: {exc}") from exc
+
+        if not resp.ok:
+            raise ValueError(
+                f"Token endpoint returned {resp.status_code}: {resp.text[:200]}"
+            )
+
+        data = resp.json()
+        access_token = data.get("access_token")
+        if not access_token:
+            raise ValueError("Token response missing access_token")
+
+        refresh_token = data.get("refresh_token")
+        expires_in = int(data.get("expires_in", 3600))
+        obtained_at = int(default_clock())
+        expires_at = obtained_at + expires_in
+
+        instance_url = authorize_base.split("/rest/", 1)[0]
+
         token_rec = TokenRecord(
-            access_token=token,
-            refresh_token=None,
-            obtained_at=0,
-            expires_at=2**31 - 1,
-            cloud_id="demo",
-            instance_url="https://example.atlassian.net",
+            access_token=access_token,
+            refresh_token=refresh_token,
+            obtained_at=obtained_at,
+            expires_at=expires_at,
+            cloud_id=None,
+            instance_url=instance_url,
         )
         self.store.save_tokens(
-            binding_id="default",
+            binding_id=txn.binding_id,
             product=product,
-            instance_id="default",
+            instance_id=txn.instance_id,
             token_record=token_rec,
         )
-        _LOG.info("Stored placeholder token for product=%s txn=%s", product, auth_txn_id)
+        _LOG.info(
+            "Exchanged OAuth code for product=%s txn=%s**** (expires in %ss)",
+            product,
+            auth_txn_id[:6],
+            expires_in,
+        )
 
     def get_binding_status(self, *, instance_id: str) -> dict[str, Any]:  # noqa: ANN401
         """Return dummy binding status until real tokens implemented."""
