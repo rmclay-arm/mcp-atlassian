@@ -25,7 +25,7 @@ import logging
 from typing import TYPE_CHECKING, Any, Literal
 
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse, Response
+from starlette.responses import HTMLResponse, JSONResponse, Response, RedirectResponse
 
 from mcp_atlassian.central_auth.service import CentralAuthService
 from mcp_atlassian.utils.logging import mask_sensitive
@@ -91,7 +91,29 @@ def register_auth_routes(app: "AtlassianMCP", *, base_path: str = "/auth") -> No
             instance,
             getattr(request.state, "correlation_id", "-"),
         )
-        return JSONResponse({"authorize_url": authorize_url})
+
+        # ------------------------------------------------------------------
+        # Content negotiation + explicit override for browser vs API clients
+        # ------------------------------------------------------------------
+        fmt_param = request.query_params.get("format")
+        accept_header = (request.headers.get("accept") or "").lower()
+
+        def _json_resp() -> JSONResponse:
+            return JSONResponse({"authorize_url": authorize_url})
+
+        def _redirect_resp() -> RedirectResponse:
+            # Use 303 See Other for GET safety across methods
+            return RedirectResponse(authorize_url, status_code=303)
+
+        if fmt_param == "json":
+            return _json_resp()
+        if fmt_param == "redirect":
+            return _redirect_resp()
+
+        if "text/html" in accept_header:
+            return _redirect_resp()
+
+        return _json_resp()
 
     # ----- GET /auth/{jira|confluence}/callback --------------------------- #
     @app.custom_route(
